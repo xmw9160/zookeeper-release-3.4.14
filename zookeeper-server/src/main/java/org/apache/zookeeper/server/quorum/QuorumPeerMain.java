@@ -99,27 +99,31 @@ public class QuorumPeerMain {
     protected void initializeAndRun(String[] args)
         throws ConfigException, IOException
     {
+        // 设置配置参数，如果 args 不为空，可以基于外部的配置路径来进行解析
         QuorumPeerConfig config = new QuorumPeerConfig();
         if (args.length == 1) {
             config.parse(args[0]);
         }
 
         // Start and schedule the the purge task
+        // 启动一个线程，来定时对日志进行清理
         DatadirCleanupManager purgeMgr = new DatadirCleanupManager(config
                 .getDataDir(), config.getDataLogDir(), config
                 .getSnapRetainCount(), config.getPurgeInterval());
         purgeMgr.start();
 
         if (args.length == 1 && config.servers.size() > 0) {
+            // 如果是集群模式，会调用 runFromConfig. servers 实际就是我们在 zoo.cfg 里面配置的集群节点
             runFromConfig(config);
         } else {
-            LOG.warn("Either no config or no quorum defined in config, running "
-                    + " in standalone mode");
+            LOG.warn("Either no config or no quorum defined in config, running in standalone mode");
             // there is only server in the quorum -- run as standalone
+            // 直接运行单机模式
             ZooKeeperServerMain.main(args);
         }
     }
 
+    // 基于配置文件来进行启动
     public void runFromConfig(QuorumPeerConfig config) throws IOException {
       try {
           ManagedUtil.registerLog4jMBeans();
@@ -129,9 +133,9 @@ public class QuorumPeerMain {
   
       LOG.info("Starting quorum peer");
       try {
+          //XXX
           ServerCnxnFactory cnxnFactory = ServerCnxnFactory.createFactory();
-          cnxnFactory.configure(config.getClientPortAddress(),
-                                config.getMaxClientCnxns());
+          cnxnFactory.configure(config.getClientPortAddress(), config.getMaxClientCnxns());
 
           quorumPeer = getQuorumPeer();
 
@@ -144,7 +148,9 @@ public class QuorumPeerMain {
           quorumPeer.setTickTime(config.getTickTime());
           quorumPeer.setInitLimit(config.getInitLimit());
           quorumPeer.setSyncLimit(config.getSyncLimit());
+          // 投票决定方式，默认超过半数就通过
           quorumPeer.setQuorumListenOnAllIPs(config.getQuorumListenOnAllIPs());
+          // 将这个 factory 设置给了 quorumPeer 的成员属性
           quorumPeer.setCnxnFactory(cnxnFactory);
           quorumPeer.setQuorumVerifier(config.getQuorumVerifier());
           quorumPeer.setClientPortAddress(config.getClientPortAddress());
@@ -167,6 +173,7 @@ public class QuorumPeerMain {
           quorumPeer.setQuorumCnxnThreadsSize(config.quorumCnxnThreadsSize);
           quorumPeer.initialize();
 
+          // 启动主线程
           quorumPeer.start();
           quorumPeer.join();
       } catch (InterruptedException e) {

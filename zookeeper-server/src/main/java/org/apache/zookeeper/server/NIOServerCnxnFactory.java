@@ -81,9 +81,14 @@ public class NIOServerCnxnFactory extends ServerCnxnFactory implements Runnable 
     public void configure(InetSocketAddress addr, int maxcc) throws IOException {
         configureSaslLogin();
 
+        // thread 其实构建的是一个 zookeeperThread 线程，并且线程的参数为 this， 表示当前 NIOServerCnxnFactory 也是实现了线程的类，
+        // 那么它必须要重写run 方法
         thread = new ZooKeeperThread(this, "NIOServerCxn.Factory:" + addr);
         thread.setDaemon(true);
+
         maxClientCnxns = maxcc;
+
+        // NIO代码
         this.ss = ServerSocketChannel.open();
         ss.socket().setReuseAddress(true);
         LOG.info("binding to port " + addr);

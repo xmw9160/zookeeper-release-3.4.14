@@ -137,8 +137,7 @@ public class QuorumPeerConfig {
 
         try {
             if (!configFile.exists()) {
-                throw new IllegalArgumentException(configFile.toString()
-                        + " file is missing");
+                throw new IllegalArgumentException(configFile.toString() + " file is missing");
             }
 
             Properties cfg = new Properties();
@@ -209,7 +208,9 @@ public class QuorumPeerConfig {
                 snapRetainCount = Integer.parseInt(value);
             } else if (key.equals("autopurge.purgeInterval")) {
                 purgeInterval = Integer.parseInt(value);
-            } else if (key.startsWith("server.")) {
+            }
+            // 服务节点解析
+            else if (key.startsWith("server.")) {
                 int dot = key.indexOf('.');
                 long sid = Long.parseLong(key.substring(dot + 1));
                 String parts[] = splitWithLeadingHostname(value);
