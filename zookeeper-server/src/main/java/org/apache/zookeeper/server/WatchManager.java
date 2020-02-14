@@ -93,10 +93,13 @@ public class WatchManager {
     }
 
     public Set<Watcher> triggerWatch(String path, EventType type, Set<Watcher> supress) {
-        WatchedEvent e = new WatchedEvent(type,
-                KeeperState.SyncConnected, path);
+        // 根据事件类型、连接状态、节点路径创建 WatchedEvent
+        WatchedEvent e = new WatchedEvent(type, KeeperState.SyncConnected, path);
+
         HashSet<Watcher> watchers;
         synchronized (this) {
+            // 从 watcher 表中移除 path，并返回其对应的 watcher 集合
+            // 只能监听一次的原因, 一直监听就需要循环注册监听才行
             watchers = watchTable.remove(path);
             if (watchers == null || watchers.isEmpty()) {
                 if (LOG.isTraceEnabled()) {
@@ -106,19 +109,27 @@ public class WatchManager {
                 }
                 return null;
             }
+            // 遍历 watcher 集合
             for (Watcher w : watchers) {
+                // 根据 watcher 从 watcher 表中取出路径集合
                 HashSet<String> paths = watch2Paths.get(w);
                 if (paths != null) {
+                    // 移除路径
                     paths.remove(path);
                 }
             }
         }
+
+        // 遍历 watcher 集合
         for (Watcher w : watchers) {
             if (supress != null && supress.contains(w)) {
                 continue;
             }
+            //XXX 处理Watcher监听
+            // NIOServerCnxn.process
             w.process(e);
         }
+
         return watchers;
     }
 

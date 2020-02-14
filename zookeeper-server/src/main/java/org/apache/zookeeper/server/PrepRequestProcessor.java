@@ -116,21 +116,27 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements
     public static void setFailCreate(boolean b) {
         failCreate = b;
     }
+
     @Override
     public void run() {
         try {
             while (true) {
+                // 从队列中拿到请求进行处理
                 Request request = submittedRequests.take();
+
                 long traceMask = ZooTrace.CLIENT_REQUEST_TRACE_MASK;
                 if (request.type == OpCode.ping) {
                     traceMask = ZooTrace.CLIENT_PING_TRACE_MASK;
                 }
+
                 if (LOG.isTraceEnabled()) {
                     ZooTrace.logRequest(LOG, traceMask, 'P', request, "");
                 }
+
                 if (Request.requestOfDeath == request) {
                     break;
                 }
+                // 调用 pRequest 进行预处理
                 pRequest(request);
             }
         } catch (RequestProcessorException e) {
@@ -677,7 +683,9 @@ public class PrepRequestProcessor extends ZooKeeperCriticalThread implements
                 request.txn = new ErrorTxn(Code.MARSHALLINGERROR.intValue());
             }
         }
+
         request.zxid = zks.getZxid();
+        // 交给下一个Processor继续处理
         nextProcessor.processRequest(request);
     }
 

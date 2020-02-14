@@ -88,7 +88,6 @@ import org.slf4j.LoggerFactory;
  * This class manages the socket i/o for the client. ClientCnxn maintains a list
  * of available servers to connect to and "transparently" switches servers it is
  * connected to as needed.
- *
  */
 @SuppressFBWarnings({"EI_EXPOSE_REP", "EI_EXPOSE_REP2"})
 public class ClientCnxn {
@@ -398,9 +397,10 @@ public class ClientCnxn {
         readTimeout = sessionTimeout * 2 / 3;
         readOnly = canBeReadOnly;
 
+        // 初始化SendThread
         sendThread = new SendThread(clientCnxnSocket);
+        // 初始化EventThread
         eventThread = new EventThread();
-
     }
 
     /**
@@ -417,6 +417,7 @@ public class ClientCnxn {
     public static void setDisableAutoResetWatch(boolean b) {
         disableAutoWatchReset = b;
     }
+
     public void start() {
         sendThread.start();
         eventThread.start();
@@ -464,17 +465,21 @@ public class ClientCnxn {
         }
 
         public void queueEvent(WatchedEvent event) {
-            if (event.getType() == EventType.None
-                    && sessionState == event.getState()) {
+            if (event.getType() == EventType.None && sessionState == event.getState()) {
                 return;
             }
+
             sessionState = event.getState();
 
             // materialize the watchers based on the event
             WatcherSetEventPair pair = new WatcherSetEventPair(
-                    watcher.materialize(event.getState(), event.getType(),
-                            event.getPath()),
-                            event);
+                    // 通过 dataWatches 或者 existWatches 或者 childWatches 的 remove 取出对应的
+                    // watch，表明客户端 watch 也是注册一次就移除
+                    // 同时需要根据 keeperState、eventType 和 path 返回应该被通知的 Watcher 集合
+                    watcher.materialize(event.getState(), event.getType(),event.getPath()),
+                    // 监听的事件
+                    event);
+
             // queue the pair (watch set & event) for later processing
             waitingEvents.add(pair);
         }
@@ -500,11 +505,14 @@ public class ClientCnxn {
         public void run() {
            try {
               isRunning = true;
+              // 死循环
               while (true) {
+                  // 从待处理的时间队列中取出事件[会阻塞]
                  Object event = waitingEvents.take();
                  if (event == eventOfDeath) {
                     wasKilled = true;
                  } else {
+                     // 执行事件处理
                     processEvent(event);
                  }
                  if (wasKilled)
@@ -525,11 +533,15 @@ public class ClientCnxn {
 
        private void processEvent(Object event) {
           try {
+              // 判断事件类型
               if (event instanceof WatcherSetEventPair) {
                   // each watcher will process the event
+                  // 得到 watcherseteventPair
                   WatcherSetEventPair pair = (WatcherSetEventPair) event;
+                  // 拿到符合触发机制的所有 watcher 列表，循环进行调用
                   for (Watcher watcher : pair.watchers) {
                       try {
+                          // 调用客户端的回调 process
                           watcher.process(pair.event);
                       } catch (Throwable t) {
                           LOG.error("Error while calling watcher ", t);
@@ -643,11 +655,15 @@ public class ClientCnxn {
        }
     }
 
+    // 把从 Packet 中取出对应的 Watcher 并注册到 ZKWatchManager 中去
     private void finishPacket(Packet p) {
         if (p.watchRegistration != null) {
+            //将事件注册到 zkwatchemanager 中
             p.watchRegistration.register(p.replyHeader.getErr());
         }
 
+        //cb 就是 AsnycCallback，如果为 null，表明是同步调用的接口，
+        // 不需要异步回掉，因此，直接 notifyAll 即可。
         if (p.cb == null) {
             synchronized (p) {
                 p.finished = true;
@@ -655,6 +671,7 @@ public class ClientCnxn {
             }
         } else {
             p.finished = true;
+            // 将当前的数据包添加到等待事件通知的队列中
             eventThread.queuePacket(p);
         }
     }
@@ -733,12 +750,12 @@ public class ClientCnxn {
         private boolean isFirstConnect = true;
 
         void readResponse(ByteBuffer incomingBuffer) throws IOException {
-            ByteBufferInputStream bbis = new ByteBufferInputStream(
-                    incomingBuffer);
+            ByteBufferInputStream bbis = new ByteBufferInputStream(incomingBuffer);
             BinaryInputArchive bbia = BinaryInputArchive.getArchive(bbis);
             ReplyHeader replyHdr = new ReplyHeader();
-
+            // 反序列化
             replyHdr.deserialize(bbia, "header");
+            // -2 is the xid for pings
             if (replyHdr.getXid() == -2) {
                 // -2 is the xid for pings
                 if (LOG.isDebugEnabled()) {
@@ -750,6 +767,7 @@ public class ClientCnxn {
                 }
                 return;
             }
+            // -4 is the xid for AuthPacket
             if (replyHdr.getXid() == -4) {
                 // -4 is the xid for AuthPacket               
                 if(replyHdr.getErr() == KeeperException.Code.AUTHFAILED.intValue()) {
@@ -763,13 +781,16 @@ public class ClientCnxn {
                 }
                 return;
             }
+            // -1 means notification, 此时要继续读取并构造一个event，通过EventThread.queueEvent发送
+            //表示当前的消息类型为一个 notification(意味着是服务端的一个响应事件)
             if (replyHdr.getXid() == -1) {
                 // -1 means notification
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Got notification sessionid:0x"
-                        + Long.toHexString(sessionId));
+                    LOG.debug("Got notification sessionid:0x" + Long.toHexString(sessionId));
                 }
+
                 WatcherEvent event = new WatcherEvent();
+                // 反序列化服务端的WatcherEvent事件
                 event.deserialize(bbia, "response");
 
                 // convert from a server path to a client path
@@ -786,12 +807,12 @@ public class ClientCnxn {
                     }
                 }
 
+                // 组装 watchedEvent 对象。
                 WatchedEvent we = new WatchedEvent(event);
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Got " + we + " for sessionid 0x"
-                            + Long.toHexString(sessionId));
+                    LOG.debug("Got " + we + " for sessionid 0x" + Long.toHexString(sessionId));
                 }
-
+                // 通过 eventTherad 进行事件处理
                 eventThread.queueEvent( we );
                 return;
             }
@@ -810,16 +831,16 @@ public class ClientCnxn {
             Packet packet;
             synchronized (pendingQueue) {
                 if (pendingQueue.size() == 0) {
-                    throw new IOException("Nothing in the queue, but got "
-                            + replyHdr.getXid());
+                    throw new IOException("Nothing in the queue, but got " + replyHdr.getXid());
                 }
+                // 因为当前这个数据包已经收到了响应，所以讲它从 pendingQueued 中移除
                 packet = pendingQueue.remove();
             }
             /*
-             * Since requests are processed in order, we better get a response
-             * to the first request!
+             * Since requests are processed in order, we better get a response to the first request!
              */
             try {
+                // 校验数据包信息，校验成功后讲数据包信息进行更新（替换为服务端的信息）
                 if (packet.requestHeader.getXid() != replyHdr.getXid()) {
                     packet.replyHeader.setErr(
                             KeeperException.Code.CONNECTIONLOSS.intValue());
@@ -839,14 +860,16 @@ public class ClientCnxn {
                     lastZxid = replyHdr.getZxid();
                 }
                 if (packet.response != null && replyHdr.getErr() == 0) {
+                    // 获得服务端的响应，反序列化以后设置到 packet.response 属性中。
+                    // 所以我们可以在exists方法的最后一行通过 packet.response 拿到改请求的返回结果
                     packet.response.deserialize(bbia, "response");
                 }
 
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Reading reply sessionid:0x"
-                            + Long.toHexString(sessionId) + ", packet:: " + packet);
+                    LOG.debug("Reading reply sessionid:0x" + Long.toHexString(sessionId) + ", packet:: " + packet);
                 }
             } finally {
+                // 最后调用 finishPacket 方法完成处理
                 finishPacket(packet);
             }
         }

@@ -194,6 +194,7 @@ public class ZooKeeper {
             case NodeDataChanged:
             case NodeCreated:
                 synchronized (dataWatches) {
+                    // 对监听进行移除
                     addTo(dataWatches.remove(clientPath), result);
                 }
                 synchronized (existWatches) {
@@ -253,13 +254,16 @@ public class ZooKeeper {
          */
         public void register(int rc) {
             if (shouldAddWatch(rc)) {
+                // 通过子类的实现取得 ZKWatchManager 中的 existsWatches
                 Map<String, Set<Watcher>> watches = getWatches(rc);
                 synchronized(watches) {
                     Set<Watcher> watchers = watches.get(clientPath);
                     if (watchers == null) {
-                        watchers = new HashSet<Watcher>();
+                        watchers = new HashSet<>();
                         watches.put(clientPath, watchers);
                     }
+
+                    //将 Watcher 对象放到 ZKWatchManager 中的 existsWatches 里面
                     watchers.add(watcher);
                 }
             }
@@ -448,9 +452,15 @@ public class ZooKeeper {
                 connectString);
         HostProvider hostProvider = new StaticHostProvider(
                 connectStringParser.getServerAddresses());
+
+        // 初始化了 ClientCnxn，并且调用 cnxn.start()方法
+        // ClientCnxn:是Zookeeper客户端和Zookeeper服务器端进行通信和事件通知处理的主要类，它内部包含两个类，
+        // 1. SendThread ：负责客户端和服务器端的数据通信, 也包括事件信息的传输
+        // 2. EventThread : 主要在客户端回调注册的 Watchers 进行通知处理
         cnxn = new ClientCnxn(connectStringParser.getChrootPath(),
                 hostProvider, sessionTimeout, this, watchManager,
                 getClientCnxnSocket(), canBeReadOnly);
+        // 启动SendThread和EventThread
         cnxn.start();
     }
 

@@ -98,26 +98,27 @@ public class FinalRequestProcessor implements RequestProcessor {
         if (LOG.isTraceEnabled()) {
             ZooTrace.logRequest(LOG, traceMask, 'E', request, "");
         }
+
         ProcessTxnResult rc = null;
         synchronized (zks.outstandingChanges) {
-            while (!zks.outstandingChanges.isEmpty()
-                    && zks.outstandingChanges.get(0).zxid <= request.zxid) {
+            while (!zks.outstandingChanges.isEmpty() && zks.outstandingChanges.get(0).zxid <= request.zxid) {
                 ChangeRecord cr = zks.outstandingChanges.remove(0);
                 if (cr.zxid < request.zxid) {
-                    LOG.warn("Zxid outstanding "
-                            + cr.zxid
-                            + " is less than current " + request.zxid);
+                    LOG.warn("Zxid outstanding " + cr.zxid + " is less than current " + request.zxid);
                 }
+
                 if (zks.outstandingChangesForPath.get(cr.path) == cr) {
                     zks.outstandingChangesForPath.remove(cr.path);
                 }
             }
+
             if (request.hdr != null) {
                TxnHeader hdr = request.hdr;
                Record txn = request.txn;
 
                rc = zks.processTxn(hdr, txn);
             }
+
             // do not add non quorum packets to the queue.
             if (Request.isQuorum(request.type)) {
                 zks.getZKDatabase().addCommittedProposal(request);
@@ -167,11 +168,9 @@ public class FinalRequestProcessor implements RequestProcessor {
                 zks.serverStats().updateLatency(request.createTime);
 
                 lastOp = "PING";
-                cnxn.updateStatsForResponse(request.cxid, request.zxid, lastOp,
-                        request.createTime, Time.currentElapsedTime());
+                cnxn.updateStatsForResponse(request.cxid, request.zxid, lastOp, request.createTime, Time.currentElapsedTime());
 
-                cnxn.sendResponse(new ReplyHeader(-2,
-                        zks.getZKDatabase().getDataTreeLastProcessedZxid(), 0), null, "response");
+                cnxn.sendResponse(new ReplyHeader(-2, zks.getZKDatabase().getDataTreeLastProcessedZxid(), 0), null, "response");
                 return;
             }
             case OpCode.createSession: {
@@ -264,14 +263,17 @@ public class FinalRequestProcessor implements RequestProcessor {
                 lastOp = "EXIS";
                 // TODO we need to figure out the security requirement for this!
                 ExistsRequest existsRequest = new ExistsRequest();
-                ByteBufferInputStream.byteBuffer2Record(request.request,
-                        existsRequest);
+                // 反序列化 (将 ByteBuffer 反序列化成为 ExitsRequest.这个就
+                // 是我们在客户端发起请求的时候传递过来的 Request 对象
+                ByteBufferInputStream.byteBuffer2Record(request.request, existsRequest);
                 String path = existsRequest.getPath();
                 if (path.indexOf('\0') != -1) {
                     throw new KeeperException.BadArgumentsException();
                 }
-                Stat stat = zks.getZKDatabase().statNode(path, existsRequest
-                        .getWatch() ? cnxn : null);
+                // 终于找到一个很关键的代码，判断请求的 getWatch 是否存在，如果存在，则传递 cnxn（servercnxn）
+                // 对于 exists 请求，需要监听 data 变化事件，添加 watcher
+                Stat stat = zks.getZKDatabase().statNode(path, existsRequest.getWatch() ? cnxn : null);
+                // 在服务端内存数据库中根据路径得到结果进行组装，设置为ExistsResponse
                 rsp = new ExistsResponse(stat);
                 break;
             }
@@ -378,7 +380,8 @@ public class FinalRequestProcessor implements RequestProcessor {
                                 .getWatch() ? cnxn : null);
                 rsp = new GetChildren2Response(children, stat);
                 break;
-            }
+                }
+            default: break;
             }
         } catch (SessionMovedException e) {
             // session moved is a connection level error, we need to tear
@@ -408,14 +411,13 @@ public class FinalRequestProcessor implements RequestProcessor {
         }
 
         long lastZxid = zks.getZKDatabase().getDataTreeLastProcessedZxid();
-        ReplyHeader hdr =
-            new ReplyHeader(request.cxid, lastZxid, err.intValue());
+        ReplyHeader hdr = new ReplyHeader(request.cxid, lastZxid, err.intValue());
 
         zks.serverStats().updateLatency(request.createTime);
-        cnxn.updateStatsForResponse(request.cxid, lastZxid, lastOp,
-                    request.createTime, Time.currentElapsedTime());
+        cnxn.updateStatsForResponse(request.cxid, lastZxid, lastOp, request.createTime, Time.currentElapsedTime());
 
         try {
+            // 发送响应数据
             cnxn.sendResponse(hdr, rsp, "response");
             if (closeSession) {
                 cnxn.sendCloseSession();
@@ -425,6 +427,7 @@ public class FinalRequestProcessor implements RequestProcessor {
         }
     }
 
+    @Override
     public void shutdown() {
         // we are the final link in the chain
         LOG.info("shutdown of request processor complete");
